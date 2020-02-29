@@ -23,14 +23,14 @@
 
 #### 2.如何定位垃圾
 
-1. 引用计数
-2. 根可达算法
+1. 引用计数（ReferenceCount）
+2. 根可达算法(RootSearching)
 
 #### 3.常见的垃圾回收算法
 
-1. 标记清除 - 位置不连续 产生碎片 效率偏低（两遍扫描）
-2. 拷贝算法 - 没有碎片，浪费空间
-3. 标记压缩 - 没有碎片，效率偏低（两遍扫描，指针需要调整）
+1. 标记清除(mark sweep) - 位置不连续 产生碎片 效率偏低（两遍扫描）
+2. 拷贝算法 (copying) - 没有碎片，浪费空间
+3. 标记压缩(mark compact) - 没有碎片，效率偏低（两遍扫描，指针需要调整）
 
 #### 4.JVM内存分代模型（用于分代垃圾回收算法）
 
@@ -42,7 +42,7 @@
    >
    > 除此之外不仅逻辑分代，而且物理分代
 
-2. 新生代 + 老年代 + 永久代（1.7）/ 元数据区(1.8) Metaspace
+2. 新生代 + 老年代 + 永久代（1.7）Perm Generation/ 元数据区(1.8) Metaspace
    1. 永久代 元数据 - Class
    2. 永久代必须指定大小限制 ，元数据可以设置，也可以不设置，无上限（受限于物理内存）
    3. 字符串常量 1.7 - 永久代，1.8 - 堆
@@ -72,6 +72,7 @@
 
 8. 分配担保：（不重要）
    YGC期间 survivor区空间不够了 空间担保直接进入老年代
+   参考：https://cloud.tencent.com/developer/article/1082730
 
 #### 5.常见的垃圾回收器
 
@@ -94,9 +95,9 @@
 8. G1(10ms)
    算法：三色标记 + SATB
 9. ZGC (1ms) PK C++
-   算法：ColoredPointers + 写屏障？
+   算法：ColoredPointers + LoadBarrier
 10. Shenandoah
-    算法：ColoredPointers + 读屏障?
+    算法：ColoredPointers + WriteBarrier
 11. Eplison
 12. PS 和 PN区别的延伸阅读：
     ▪[https://docs.oracle.com/en/java/javase/13/gctuning/ergonomics.html#GUID-3D0BB91E-9BFF-4EBB-B523-14493A860E73](https://docs.oracle.com/en/java/javase/13/gctuning/ergonomics.html)
@@ -105,9 +106,29 @@
     2. PS 上百兆 - 几个G
     3. CMS - 20G
     4. G1 - 上百G
-    5. ZGC - 4T
+    5. ZGC - 4T - 16T（JDK13）
 
 1.8默认的垃圾回收：PS + ParallelOld
+
+### 常见垃圾回收器组合参数设定：(1.8)
+
+* -XX:+UseSerialGC = Serial New (DefNew) + Serial Old
+  * 小型程序。默认情况下不会是这种选项，HotSpot会根据计算及配置和JDK版本自动选择收集器
+* -XX:+UseParNewGC = ParNew + SerialOld
+  * 这个组合已经很少用（在某些版本中已经废弃）
+  * https://stackoverflow.com/questions/34962257/why-remove-support-for-parnewserialold-anddefnewcms-in-the-future
+* -XX:+UseConc<font color=red>(urrent)</font>MarkSweepGC = ParNew + CMS + Serial Old
+* -XX:+UseParallelGC = Parallel Scavenge + Parallel Old (1.8默认) 【PS + SerialOld】
+* -XX:+UseParallelOldGC = Parallel Scavenge + Parallel Old
+* -XX:+UseG1GC = G1
+* Linux中没找到默认GC的查看方法，而windows中会打印UseParallelGC 
+  * java +XX:+PrintCommandLineFlags -version
+  * 通过GC的日志来分辨
+
+* Linux下1.8版本默认的垃圾回收器到底是什么？
+
+  * 1.8.0_181 默认（看不出来）Copy MarkCompact
+  * 1.8.0_222 默认 PS + PO
 
 ### JVM调优第一步，了解JVM常用命令行参数
 
@@ -147,13 +168,15 @@
 
   
 
-  1. java -XX:+PrintCommandLineFlags HelloGC
-  2. java -Xmn10M -Xms40M -Xmx60M -XX:+PrintCommandLineFlags -XX:PrintGC  HelloGC
-  3. java -XX:+UseConcMarkSweepGC -XX:+PrintCommandLineFlags HelloGC
-  4. java -XX:+PrintFlagsInitial 默认参数值
-  5. java -XX:+PrintFlagsFinal 最终参数值
-  6. java -XX:+PrintFlagsFinal | grep xxx 找到对应的参数
-  7. java -XX:+PrintFlagsFinal -version |grep GC
+  1. 区分概念：内存泄漏memory leak，内存溢出out of memory
+  2. java -XX:+PrintCommandLineFlags HelloGC
+  3. java -Xmn10M -Xms40M -Xmx60M -XX:+PrintCommandLineFlags -XX:+PrintGC  HelloGC
+     PrintGCDetails PrintGCTimeStamps PrintGCCauses
+  4. java -XX:+UseConcMarkSweepGC -XX:+PrintCommandLineFlags HelloGC
+  5. java -XX:+PrintFlagsInitial 默认参数值
+  6. java -XX:+PrintFlagsFinal 最终参数值
+  7. java -XX:+PrintFlagsFinal | grep xxx 找到对应的参数
+  8. java -XX:+PrintFlagsFinal -version |grep GC
 
 ### PS GC日志详解
 
@@ -170,38 +193,34 @@ eden space 5632K, 94% used [0x00000000ff980000,0x00000000ffeb3e28,0x00000000fff0
                             后面的内存地址指的是，起始地址，使用空间结束地址，整体空间结束地址
 ```
 
-### 常见垃圾回收器组合参数设定：(1.8)
+![GCHeapDump](GCHeapDump.png)
 
-* -XX:+UseSerialGC = Serial New (DefNew) + Serial Old
-  * 小型程序。默认情况下不会是这种选项，HotSpot会根据计算及配置和JDK版本自动选择收集器
-* -XX:+UseParNewGC = ParNew + SerialOld
-  * 这个组合已经很少用（在某些版本中已经废弃）
-  * https://stackoverflow.com/questions/34962257/why-remove-support-for-parnewserialold-anddefnewcms-in-the-future
-* UseConc<font color=red>(urrent)</font>MarkSweepGC = ParNew + CMS + Serial Old
-* UseParallelGC = Parallel Scavenge + Parallel Old (1.8默认) 【PS + SerialOld】
-* UseParallelOldGC = Parallel Scavenge + Parallel Old
-* UseG1GC = G1
-* Linux中没找到默认GC的查看方法，而windows中会打印UseParallelGC 
-  * java +XX:+PrintCommandLineFlags -version
-  * 通过GC的日志来分辨
+total = eden + 1个survivor
 
-* Linux下1.8版本默认的垃圾回收器到底是什么？
+### 调优前的基础概念：
 
-  * 1.8.0_181 默认（看不出来）Copy MarkCompact
-  * 1.8.0_222 默认 PS + PO
+1. 吞吐量：用户代码时间 /（用户代码执行时间 + 垃圾回收时间）
+2. 响应时间：STW越短，响应时间越好
+
+所谓调优，首先确定，追求啥？吞吐量优先，还是响应时间优先？还是在满足一定的响应时间的情况下，要求达到多大的吞吐量...
+
+问题：
+
+科学计算，吞吐量。数据挖掘，thrput。吞吐量优先的一般：（PS + PO）
+
+响应时间：网站 GUI API （1.8 G1）
 
 ### 什么是调优？
 
 1. 根据需求进行JVM规划和预调优
-2. 优化运行JVM运行环境
-3. 解决JVM运行过程中出现的各种问题
+2. 优化运行JVM运行环境（慢，卡顿）
+3. 解决JVM运行过程中出现的各种问题(OOM)
 
 ### 调优，从规划开始
 
 * 调优，从业务场景开始，没有业务场景的调优都是耍流氓
-  压测
   
-* 无监控，不调优
+* 无监控（压力测试，能看到结果），不调优
 
 * 步骤：
   1. 熟悉业务场景（没有最好的垃圾回收器，只有最合适的垃圾回收器）
@@ -209,21 +228,26 @@ eden space 5632K, 94% used [0x00000000ff980000,0x00000000ffeb3e28,0x00000000fff0
      2. 吞吐量 = 用户时间 /( 用户时间 + GC时间) [PS]
   2. 选择回收器组合
   3. 计算内存需求（经验值 1.5G 16G）
-  4. 设定年代大小、升级年龄
-  5. 设定日志参数
+  4. 选定CPU（越高越好）
+  5. 设定年代大小、升级年龄
+  6. 设定日志参数
      1. -Xloggc:/opt/xxx/logs/xxx-xxx-gc-%t.log -XX:+UseGCLogFileRotation -XX:NumberOfGCLogFiles=5 -XX:GCLogFileSize=20M -XX:+PrintGCDetails -XX:+PrintGCDateStamps -XX:+PrintGCCause
      2. 或者每天产生一个日志文件
-  6. 观察日志情况
+  7. 观察日志情况
   
 * 案例1：垂直电商，最高每日百万订单，处理订单系统需要什么样的服务器配置？
 
   > 这个问题比较业余，因为很多不同的服务器配置都能支撑(1.5G 16G)
   >
-  > 1小时360000集中时间段， 100个订单/秒
+  > 1小时360000集中时间段， 100个订单/秒，（找一小时内的高峰期，1000订单/秒）
   >
   > 经验值，
   >
+  > 非要计算：一个订单产生需要多少内存？512K * 1000 500M内存
+  >
   > 专业一点儿问法：要求响应时间100ms
+  >
+  > 压测！
 
 * 案例2：12306遭遇春节大规模抢票应该如何支撑？
 
@@ -231,7 +255,7 @@ eden space 5632K, 94% used [0x00000000ff980000,0x00000000ffeb3e28,0x00000000fff0
   >
   > 号称并发量100W最高
   >
-  > CDN -> LVS -> NGINX -> 业务系统 -> 每台机器1W并发 100台机器
+  > CDN -> LVS -> NGINX -> 业务系统 -> 每台机器1W并发（10K问题） 100台机器
   >
   > 普通电商订单 -> 下单 ->订单系统（IO）减库存 ->等待用户付款
   >
@@ -240,6 +264,8 @@ eden space 5632K, 94% used [0x00000000ff980000,0x00000000ffeb3e28,0x00000000fff0
   > 减库存最后还会把压力压到一台服务器
   >
   > 可以做分布式本地库存 + 单独服务器做库存均衡
+  >
+  > 大流量的处理方法：分而治之
 
 * 怎么得到一个事务会消耗多少内存？
 
@@ -252,9 +278,24 @@ eden space 5632K, 94% used [0x00000000ff980000,0x00000000ffeb3e28,0x00000000fff0
 1. 有一个50万PV的资料类网站（从磁盘提取文档到内存）原服务器32位，1.5G
    的堆，用户反馈网站比较缓慢，因此公司决定升级，新的服务器为64位，16G
    的堆内存，结果用户反馈卡顿十分严重，反而比以前效率更低了
-   为什么？
-   如何优化？
-2. 系统CPU经常100%，如何调优？
+   1. 为什么原网站慢?
+      很多用户浏览数据，很多数据load到内存，内存不足，频繁GC，STW长，响应时间变慢
+   2. 为什么会更卡顿？
+      内存越大，FGC时间越长
+   3. 咋办？
+      PS -> PN + CMS 或者 G1
+2. 系统CPU经常100%，如何调优？(面试高频)
+   CPU100%那么一定有线程在占用系统资源，
+   1. 找出哪个进程cpu高（top）
+   2. 该进程中的哪个线程cpu高（top -Hp）
+   3. 导出该线程的堆栈 (jstack)
+   4. 查找哪个方法（栈帧）消耗时间 (jstack)
+   5. 工作线程占比高 | 垃圾回收线程占比高
+3. 系统内存飙高，如何查找问题？（面试高频）
+   1. 导出堆内存 (jmap)
+   2. 分析 (jhat jvisualvm mat jprofiler ... )
+4. 如何监控JVM
+   1. jstat jvisualvm jprofiler arthas top...
 
 ### 解决JVM运行中的问题
 
@@ -326,27 +367,52 @@ eden space 5632K, 94% used [0x00000000ff980000,0x00000000ffeb3e28,0x00000000fff0
    
    ```
 
-2. java -Xms200M -Xmx200M com.mashibing.jvm.gc.T15_FullGC_Problem01
+2. java -Xms200M -Xmx200M -XX:+PrintGC com.mashibing.jvm.gc.T15_FullGC_Problem01
 
-3. top命令观察到问题：内存不断增长 CPU占用率居高不下
+3. 一般是运维团队首先受到报警信息（CPU Memory）
 
-4. jps定位具体java进程
+4. top命令观察到问题：内存不断增长 CPU占用率居高不下
 
-5. jinfo pid 
+5. top -Hp 观察进程中的线程，哪个线程CPU和内存占比高
 
-6. jstat -gc 动态观察gc情况 / 阅读GC日志发现频繁GC / arthas观察 / jconsole
+6. jps定位具体java进程
+   jstack 定位线程状况，重点关注：WAITING BLOCKED
+   eg.
+   waiting on <0x0000000088ca3310> (a java.lang.Object)
+   假如有一个进程中100个线程，很多线程都在waiting on <xx> ，一定要找到是哪个线程持有这把锁
+   怎么找？搜索jstack dump的信息，找<xx> ，看哪个线程持有这把锁RUNNABLE
+   作业：1：写一个死锁程序，用jstack观察 2 ：写一个程序，一个线程持有锁不释放，其他线程等待
+
+7. 为什么阿里规范里规定，线程的名称（尤其是线程池）都要写有意义的名称
+   怎么样自定义线程池里的线程名称？（自定义ThreadFactory）
+
+8. jinfo pid 
+
+9. jstat -gc 动态观察gc情况 / 阅读GC日志发现频繁GC / arthas观察 / jconsole/jvisualVM/ Jprofiler（最好用）
    jstat -gc 4655 500 : 每个500个毫秒打印GC的情况
+   如果面试官问你是怎么定位OOM问题的？如果你回答用图形界面（错误）
+   1：已经上线的系统不用图形界面用什么？（cmdline arthas）
+   2：图形界面到底用在什么地方？测试！测试的时候进行监控！（压测观察）
 
-7. jmap - histo 4655 | head -20，查找有多少对象产生
+10. jmap - histo 4655 | head -20，查找有多少对象产生
 
-8. jmap -dump:format=b,file=xxx pid / jmap -histo
+11. jmap -dump:format=b,file=xxx pid ：
 
-9. java -Xms20M -Xmx20M -XX:+UseParallelGC -XX:+HeapDumpOnOutOfMemoryError com.mashibing.jvm.gc.T15_FullGC_Problem01
+    线上系统，内存特别大，jmap执行期间会对进程产生很大影响，甚至卡顿（电商不适合）
+    1：设定了参数HeapDump，OOM的时候会自动产生堆转储文件
+    2：<font color='red'>很多服务器备份（高可用），停掉这台服务器对其他服务器不影响</font>
+    3：在线定位(一般小点儿公司用不到)
 
-10. 使用MAT / jhat进行dump文件分析
+12. java -Xms20M -Xmx20M -XX:+UseParallelGC -XX:+HeapDumpOnOutOfMemoryError com.mashibing.jvm.gc.T15_FullGC_Problem01
+
+13. 使用MAT / jhat /jvisualvm 进行dump文件分析
      https://www.cnblogs.com/baihuitestsoftware/articles/6406271.html 
-
-11. 找到代码的问题
+jhat -J-mx512M xxx.dump
+    http://192.168.17.11:7000
+    拉到最后：找到对应链接
+    可以使用OQL查找特定问题对象
+    
+14. 找到代码的问题
 
 #### jconsole远程连接
 
@@ -382,6 +448,26 @@ eden space 5632K, 94% used [0x00000000ff980000,0x00000000ffeb3e28,0x00000000fff0
 
 * 为什么需要在线排查？
    在生产上我们经常会碰到一些不好排查的问题，例如线程安全问题，用最简单的threaddump或者heapdump不好查到问题原因。为了排查这些问题，有时我们会临时加一些日志，比如在一些关键的函数里打印出入参，然后重新打包发布，如果打了日志还是没找到问题，继续加日志，重新打包发布。对于上线流程复杂而且审核比较严的公司，从改代码到上线需要层层的流转，会大大影响问题排查的进度。 
+* jvm观察jvm信息
+* thread定位线程问题
+* dashboard 观察系统情况
+* heapdump + jhat分析
+* jad反编译
+   动态代理生成类的问题定位
+   第三方的类（观察代码）
+   版本问题（确定自己最新提交的版本是不是被使用）
+* redefine 热替换
+   目前有些限制条件：只能改方法实现（方法已经运行完成），不能改方法名， 不能改属性
+   m() -> mm()
+* sc  - search class
+* watch  - watch method
+* 没有包含的功能：jmap
+
+### GC算法的基础概念
+
+* Card Table
+  由于做YGC时，需要扫描整个OLD区，效率非常低，所以JVM设计了CardTable， 如果一个OLD区CardTable中有对象指向Y区，就将它设为Dirty，下次扫描时，只需要扫描Dirty Card
+  在结构上，Card Table用BitMap来实现
 
 ### CMS
 
@@ -405,17 +491,121 @@ eden space 5632K, 94% used [0x00000000ff980000,0x00000000ffeb3e28,0x00000000fff0
    >
    > –XX:CMSInitiatingOccupancyFraction 92% 可以降低这个值，让CMS保持老年代足够的空间
 
+#### CMS日志分析
+
+执行命令：java -Xms20M -Xmx20M -XX:+PrintGCDetails -XX:+UseConcMarkSweepGC com.mashibing.jvm.gc.T15_FullGC_Problem01
+
+[GC (Allocation Failure) [ParNew: 6144K->640K(6144K), 0.0265885 secs] 6585K->2770K(19840K), 0.0268035 secs] [Times: user=0.02 sys=0.00, real=0.02 secs] 
+
+> ParNew：年轻代收集器
+>
+> 6144->640：收集前后的对比
+>
+> （6144）：整个年轻代容量
+>
+> 6585 -> 2770：整个堆的情况
+>
+> （19840）：整个堆大小
+
+
+
+```java
+[GC (CMS Initial Mark) [1 CMS-initial-mark: 8511K(13696K)] 9866K(19840K), 0.0040321 secs] [Times: user=0.01 sys=0.00, real=0.00 secs] 
+	//8511 (13696) : 老年代使用（最大）
+	//9866 (19840) : 整个堆使用（最大）
+[CMS-concurrent-mark-start]
+[CMS-concurrent-mark: 0.018/0.018 secs] [Times: user=0.01 sys=0.00, real=0.02 secs] 
+	//这里的时间意义不大，因为是并发执行
+[CMS-concurrent-preclean-start]
+[CMS-concurrent-preclean: 0.000/0.000 secs] [Times: user=0.00 sys=0.00, real=0.00 secs] 
+	//标记Card为Dirty，也称为Card Marking
+[GC (CMS Final Remark) [YG occupancy: 1597 K (6144 K)][Rescan (parallel) , 0.0008396 secs][weak refs processing, 0.0000138 secs][class unloading, 0.0005404 secs][scrub symbol table, 0.0006169 secs][scrub string table, 0.0004903 secs][1 CMS-remark: 8511K(13696K)] 10108K(19840K), 0.0039567 secs] [Times: user=0.00 sys=0.00, real=0.00 secs] 
+	//STW阶段，YG occupancy:年轻代占用及容量
+	//[Rescan (parallel)：STW下的存活对象标记
+	//weak refs processing: 弱引用处理
+	//class unloading: 卸载用不到的class
+	//scrub symbol(string) table: 
+		//cleaning up symbol and string tables which hold class-level metadata and 
+		//internalized string respectively
+	//CMS-remark: 8511K(13696K): 阶段过后的老年代占用及容量
+	//10108K(19840K): 阶段过后的堆占用及容量
+
+[CMS-concurrent-sweep-start]
+[CMS-concurrent-sweep: 0.005/0.005 secs] [Times: user=0.00 sys=0.00, real=0.01 secs] 
+	//标记已经完成，进行并发清理
+[CMS-concurrent-reset-start]
+[CMS-concurrent-reset: 0.000/0.000 secs] [Times: user=0.00 sys=0.00, real=0.00 secs]
+	//重置内部结构，为下次GC做准备
+```
+
+
+
+### G1
+
+1. ▪https://www.oracle.com/technical-resources/articles/java/g1gc.html
+
+#### G1日志详解
+
+```java
+[GC pause (G1 Evacuation Pause) (young) (initial-mark), 0.0015790 secs]
+//young -> 年轻代 Evacuation-> 复制存活对象 
+//initial-mark 混合回收的阶段，这里是YGC混合老年代回收
+   [Parallel Time: 1.5 ms, GC Workers: 1] //一个GC线程
+      [GC Worker Start (ms):  92635.7]
+      [Ext Root Scanning (ms):  1.1]
+      [Update RS (ms):  0.0]
+         [Processed Buffers:  1]
+      [Scan RS (ms):  0.0]
+      [Code Root Scanning (ms):  0.0]
+      [Object Copy (ms):  0.1]
+      [Termination (ms):  0.0]
+         [Termination Attempts:  1]
+      [GC Worker Other (ms):  0.0]
+      [GC Worker Total (ms):  1.2]
+      [GC Worker End (ms):  92636.9]
+   [Code Root Fixup: 0.0 ms]
+   [Code Root Purge: 0.0 ms]
+   [Clear CT: 0.0 ms]
+   [Other: 0.1 ms]
+      [Choose CSet: 0.0 ms]
+      [Ref Proc: 0.0 ms]
+      [Ref Enq: 0.0 ms]
+      [Redirty Cards: 0.0 ms]
+      [Humongous Register: 0.0 ms]
+      [Humongous Reclaim: 0.0 ms]
+      [Free CSet: 0.0 ms]
+   [Eden: 0.0B(1024.0K)->0.0B(1024.0K) Survivors: 0.0B->0.0B Heap: 18.8M(20.0M)->18.8M(20.0M)]
+ [Times: user=0.00 sys=0.00, real=0.00 secs] 
+//以下是混合回收其他阶段
+[GC concurrent-root-region-scan-start]
+[GC concurrent-root-region-scan-end, 0.0000078 secs]
+[GC concurrent-mark-start]
+//无法evacuation，进行FGC
+[Full GC (Allocation Failure)  18M->18M(20M), 0.0719656 secs]
+   [Eden: 0.0B(1024.0K)->0.0B(1024.0K) Survivors: 0.0B->0.0B Heap: 18.8M(20.0M)->18.8M(20.0M)], [Metaspace: 38
+76K->3876K(1056768K)] [Times: user=0.07 sys=0.00, real=0.07 secs]
+
+```
+
+
+
 ### 案例汇总
+
+OOM产生的原因多种多样，有些程序未必产生OOM，不断FGC(CPU飙高，但内存回收特别少) （上面案例）
 
 1. 硬件升级系统反而卡顿的问题（见上）
 
 2. 线程池不当运用产生OOM问题（见上）
+   不断的往List里加对象（实在太LOW）
 
 3. smile jira问题
+   实际系统不断重启
+   解决问题 加内存 + 更换垃圾回收器 G1
+   真正问题在哪儿？不知道
 
-4. tomcat http-header-size过大问题
+4. tomcat http-header-size过大问题（Hector）
 
-5. lambda表达式导致方法区溢出问题
+5. lambda表达式导致方法区溢出问题(MethodArea / Perm Metaspace)
    LambdaGC.java     -XX:MaxMetaspaceSize=9M -XX:+PrintGCDetails
 
    ```java
@@ -475,6 +665,7 @@ eden space 5632K, 94% used [0x00000000ff980000,0x00000000ffeb3e28,0x00000000fff0
    Object o = null;
    for(int i=0; i<100; i++) {
        o = new Object();
+       //业务处理
    }
    ```
 
@@ -484,23 +675,125 @@ eden space 5632K, 94% used [0x00000000ff980000,0x00000000ffeb3e28,0x00000000fff0
    }
    ```
 
-9. 
+9. 重写finalize引发频繁GC
+   小米云，HBase同步系统，系统通过nginx访问超时报警，最后排查，C++程序员重写finalize引发频繁GC问题
+为什么C++程序员会重写finalize？（new delete）
+   finalize耗时比较长（200ms）
+   
+10. 如果有一个系统，内存一直消耗不超过10%，但是观察GC日志，发现FGC总是频繁产生，会是什么引起的？
+    System.gc() (这个比较Low)
+
+11. Distuptor有个可以设置链的长度，如果过大，然后对象大，消费完不主动释放，会溢出 (来自 死物风情)
+
+12. 用jvm都会溢出，mycat用崩过，1.6.5某个临时版本解析sql子查询算法有问题，9个exists的联合sql就导致生成几百万的对象（来自 死物风情）
+
+13. new 大量线程，会产生 native thread OOM，（low）应该用线程池，
+    解决方案：减少堆空间（太TMlow了）,预留更多内存产生native thread
+    JVM内存占物理内存比例 50% - 80%
+
+
+### GC常用参数
+
+* -Xmn -Xms -Xmx -Xss
+  年轻代 最小堆 最大堆 栈空间
+* -XX:+UseTLAB
+  使用TLAB，默认打开
+* -XX:+PrintTLAB
+  打印TLAB的使用情况
+* -XX:TLABSize
+  设置TLAB大小
+* -XX:+DisableExplictGC
+  System.gc()不管用 ，FGC
+* -XX:+PrintGC
+* -XX:+PrintGCDetails
+* -XX:+PrintHeapAtGC
+* -XX:+PrintGCTimeStamps
+* -XX:+PrintGCApplicationConcurrentTime (低)
+  打印应用程序时间
+* -XX:+PrintGCApplicationStoppedTime （低）
+  打印暂停时长
+* -XX:+PrintReferenceGC （重要性低）
+  记录回收了多少种不同引用类型的引用
+* -verbose:class
+  类加载详细过程
+* -XX:+PrintVMOptions
+* -XX:+PrintFlagsFinal  -XX:+PrintFlagsInitial
+  必须会用
+* -Xloggc:opt/log/gc.log
+* -XX:MaxTenuringThreshold
+  升代年龄，最大值15
+* 锁自旋次数 -XX:PreBlockSpin 热点代码检测参数-XX:CompileThreshold 逃逸分析 标量替换 ... 
+  这些不建议设置
+
+### Parallel常用参数
+
+* -XX:SurvivorRatio
+* -XX:PreTenureSizeThreshold
+  大对象到底多大
+* -XX:MaxTenuringThreshold
+* -XX:+ParallelGCThreads
+  并行收集器的线程数，同样适用于CMS，一般设为和CPU核数相同
+* -XX:+UseAdaptiveSizePolicy
+  自动选择各区大小比例
+
+### CMS常用参数
+
+* -XX:+UseConcMarkSweepGC
+* -XX:ParallelCMSThreads
+  CMS线程数量
+* -XX:CMSInitiatingOccupancyFraction
+  使用多少比例的老年代后开始CMS收集，默认是68%(近似值)，如果频繁发生SerialOld卡顿，应该调小，（频繁CMS回收）
+* -XX:+UseCMSCompactAtFullCollection
+  在FGC时进行压缩
+* -XX:CMSFullGCsBeforeCompaction
+  多少次FGC之后进行压缩
+* -XX:+CMSClassUnloadingEnabled
+* -XX:CMSInitiatingPermOccupancyFraction
+  达到什么比例时进行Perm回收
+* GCTimeRatio
+  设置GC时间占用程序运行时间的百分比
+* -XX:MaxGCPauseMillis
+  停顿时间，是一个建议时间，GC会尝试用各种手段达到这个时间，比如减小年轻代
+
+### G1常用参数
+
+* -XX:+UseG1GC
+* -XX:MaxGCPauseMillis
+  建议值，G1会尝试调整Young区的块数来达到这个值
+* -XX:GCPauseIntervalMillis
+  ？GC的间隔时间
+* -XX:+G1HeapRegionSize
+  分区大小，建议逐渐增大该值，1 2 4 8 16 32。
+  随着size增加，垃圾的存活时间更长，GC间隔更长，但每次GC的时间也会更长
+  ZGC做了改进（动态区块大小）
+* G1NewSizePercent
+  新生代最小比例，默认为5%
+* G1MaxNewSizePercent
+  新生代最大比例，默认为60%
+* GCTimeRatio
+  GC时间建议比例，G1会根据这个值调整堆空间
+* ConcGCThreads
+  线程数量
+* InitiatingHeapOccupancyPercent
+  启动G1的堆空间占用比例
+
+
 
 #### 作业
 
 1. -XX:MaxTenuringThreshold控制的是什么？
-   	A: 对象升入老年代的年龄
-      	B: 老年代触发FGC时的内存垃圾比例
-   
+   A: 对象升入老年代的年龄
+     	B: 老年代触发FGC时的内存垃圾比例
+
 2. 生产环境中，倾向于将最大堆内存和最小堆内存设置为：（为什么？）
-   	A: 相同 B：不同
-   
+   A: 相同 B：不同
+
 3. JDK1.8默认的垃圾回收器是：
-   	A: ParNew + CMS
-      	B: G1
-      	C: PS + ParallelOld
-      	D: 以上都不是
-   
+   A: ParNew + CMS
+     	B: G1
+     	C: PS + ParallelOld
+     	D: 以上都不是
+
 4. 什么是响应时间优先？
 
 5. 什么是吞吐量优先？
@@ -539,33 +832,36 @@ eden space 5632K, 94% used [0x00000000ff980000,0x00000000ffeb3e28,0x00000000fff0
 
 17. 如果G1产生FGC，你应该做什么？
 
-     1. 扩内存
-     2. 提高CPU性能（回收的快，业务逻辑产生对象的速度固定，垃圾回收越快，内存空间越大）
-    
+      1. 扩内存
+      2. 提高CPU性能（回收的快，业务逻辑产生对象的速度固定，垃圾回收越快，内存空间越大）
+      3. 降低MixedGC触发的阈值，让MixedGC提早发生（默认是45%）
+
  18. 问：生产环境中能够随随便便的dump吗？
      小堆影响不大，大堆会有服务暂停或卡顿（加live可以缓解），dump前会有FGC
-     
+
  19. 问：常见的OOM问题有哪些？
      栈 堆 MethodArea 直接内存
+
+
 
 ### 参考资料
 
 1. [https://blogs.oracle.com/](https://blogs.oracle.com/jonthecollector/our-collectors)[jonthecollector](https://blogs.oracle.com/jonthecollector/our-collectors)[/our-collectors](https://blogs.oracle.com/jonthecollector/our-collectors)
 2. https://docs.oracle.com/javase/8/docs/technotes/tools/unix/java.html
 3. http://java.sun.com/javase/technologies/hotspot/vmoptions.jsp
-4.  JVM调优参考文档：https://docs.oracle.com/en/java/javase/13/gctuning/introduction-garbage-collection-tuning.html#GUID-8A443184-7E07-4B71-9777-4F12947C8184 
-5.  https://www.cnblogs.com/nxlhero/p/11660854.html 在线排查工具
-6.  https://www.jianshu.com/p/507f7e0cc3a3 arthas常用命令
+4. JVM调优参考文档：https://docs.oracle.com/en/java/javase/13/gctuning/introduction-garbage-collection-tuning.html#GUID-8A443184-7E07-4B71-9777-4F12947C8184 
+5. https://www.cnblogs.com/nxlhero/p/11660854.html 在线排查工具
+6. https://www.jianshu.com/p/507f7e0cc3a3 arthas常用命令
 7. Arthas手册：
-    1. 启动arthas java -jar arthas-boot.jar
-    2. 绑定java进程
-    3. dashboard命令观察系统整体情况
-    4. help 查看帮助
-    5. help xx 查看具体命令帮助
+   1. 启动arthas java -jar arthas-boot.jar
+   2. 绑定java进程
+   3. dashboard命令观察系统整体情况
+   4. help 查看帮助
+   5. help xx 查看具体命令帮助
 8. jmap命令参考： https://www.jianshu.com/p/507f7e0cc3a3 
-    1. jmap -heap pid
-    2. jmap -histo pid
-    3. jmap -clstats pid
+   1. jmap -heap pid
+   2. jmap -histo pid
+   3. jmap -clstats pid
 
-### ParallelGC常用参数
+
 
